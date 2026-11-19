@@ -2,7 +2,7 @@
 
 **Build infrastructure you own.** A free, self-hostable foundation for a multi-project cache, session, and job platform.
 
-> **Status: v0.3.0 / experimental.** PostgreSQL-backed durable keys are now available as an opt-in backend. CacheLoom is not Redis-protocol-compatible and cannot be used as a drop-in BullMQ backend. Do not move production authentication or notification queues until operational and failure-recovery testing is complete.
+> **Status: v0.4.0 / experimental.** PostgreSQL-backed durable keys are now available as an opt-in backend. CacheLoom is not Redis-protocol-compatible and cannot be used as a drop-in BullMQ backend. Do not move production authentication or notification queues until operational and failure-recovery testing is complete.
 
 ## Available today
 
@@ -88,11 +88,11 @@ Test with `npm test`. CI also runs `npm run test:postgres` against disposable Po
 
 ## Roadmap
 
-1. **M1 (current):** Core key-value operations, TTL, auth, JS SDK and tests.
+1. **M1 (completed):** Core key-value operations, TTL, auth, JS SDK and tests.
 2. **M2:** PostgreSQL-backed durable keyspace for sessions and distributed rate limits; key rotation and quotas.
 3. **M3 (implemented, experimental):** Persistent SQL job queue using `FOR UPDATE SKIP LOCKED`, fenced leases, retries, scheduling and dead letters.
-4. **M4:** Redis RESP2 subset and command compatibility tests. BullMQ parity is a separate milestone.
-5. **M5:** Admin dashboard, metrics, audit logs, backup/restore, observability and load testing.
+4. **M4 (in progress):** Reusable worker SDK, queue metrics and monitoring page; RESP2 compatibility remains a later milestone.
+5. **M5:** Advanced administration, audit logs, backup/restore, operational observability and load testing.
 
 Existing production Auth/Notification services remain unchanged until CacheLoom passes security and failure-recovery testing.
 
@@ -145,3 +145,56 @@ A lost lease may mean the side effect ran before the worker crashed, so use
 an idempotent handler and avoid blind retries of non-idempotent SMTP sends.
 The free database and hosting plans have limits: use modest polling intervals,
 monitor compute/storage use, and do not point CI at a production database.
+
+## Worker SDK and monitoring (v0.4.0)
+
+`CacheloomWorker` polls the durable queue, runs handlers concurrently, renews their
+leases, and drains active jobs on shutdown. A handler receives an `AbortSignal`
+when ownership is lost or the shutdown deadline expires. **The signal cannot undo
+side effects that already happened**, so each external effect still needs its own
+idempotency key.
+
+```js
+import { CacheloomClient } from './sdk/client.js';
+import { CacheloomWorker } from './sdk/worker.js';
+
+const client = new CacheloomClient({
+  url: 'http://127.0.0.1:8080', apiKey: process.env.CACHELOOM_KEY,
+});
+const worker = new CacheloomWorker({
+  client, queue: 'emails', concurrency: 2, leaseSeconds: 60,
+  pollIntervalMs: 2000,
+  handler: async (payload, { job, signal }) => {
+    // Pass job.id to your provider as an idempotency key where possible.
+    await sendEmail(payload, { signal, idempotencyKey: job.id });
+  },
+  onError: error => console.error('[emails]', error),
+});
+worker.start();
+for (const signal of ['SIGINT', 'SIGTERM']) {
+  process.once(signal, () => {
+    void worker.stop({ timeoutMs: 30000 }).then(({ drained }) => {
+      if (!drained) process.exitCode = 1;
+    });
+  });
+}
+```
+
+The worker is a separate Node.js process, not an API server route. Keep the
+handler responsive to cancellation and monitor `lease-lost` events.
+
+**Queue dashboard:** Open `/dashboard` on your CacheLoom server. Enter a
+project API key to view queue counts and recent jobs without seeing payloads.
+The key stays in the page's memory and is cleared manually; it is not stored
+in browser storage. Use HTTPS and a trusted reverse proxy for any remote access.
+
+The SDK also supports:
+
+```js
+const metrics = await client.queueMetrics('emails');
+const recent = await client.listJobs({ queue: 'emails', status: 'dead', limit: 25 });
+```
+
+**Current limitations:** The dashboard is read-only, the worker SDK does not
+guarantee exactly-once execution, and free PostgreSQL hosting can impose usage
+and connection limits. No production Auth/Notification migration has happened.
