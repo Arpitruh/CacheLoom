@@ -2,3 +2,7 @@ node_modules/
 .env
 coverage/
 *.log
+
+# Per-host Oracle staging secrets and local overrides
+deploy/oci/.env.oci
+deploy/oci/*.override.yaml

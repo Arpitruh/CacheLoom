@@ -1,0 +1,26 @@
+name: Validate Oracle staging deployment
+on:
+  pull_request:
+    paths:
+      - 'deploy/oci/**'
+      - '.gitignore'
+      - '.github/workflows/validate-oracle.yml'
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  compose:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Validate Compose and Caddy configuration
+        run: |
+          cp deploy/oci/.env.oci.example deploy/oci/.env.oci
+          docker compose --env-file deploy/oci/.env.oci -f deploy/oci/compose.yaml config --quiet
+          docker run --rm -v "$PWD/deploy/oci/Caddyfile:/etc/caddy/Caddyfile:ro" \
+            -e CACHELOOM_DOMAIN=cacheloom-staging.example.com caddy:2-alpine \
+            caddy validate --config /etc/caddy/Caddyfile
+      - name: Ensure sensitive files are excluded
+        run: |
+          git check-ignore -q deploy/oci/.env.oci
+          ! grep -R -n '5432:5432\|8080:8080' deploy/oci/compose.yaml
