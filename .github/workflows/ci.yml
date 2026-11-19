@@ -25,6 +25,7 @@ jobs:
       - run: node --check src/job-queue.js
       - run: node --check scripts/migrate.js
       - run: node --check sdk/client.js
+      - run: node --check sdk/worker.js
 
   postgres:
     runs-on: ubuntu-latest
