@@ -26,6 +26,7 @@ jobs:
       - run: node --check src/rate-limit.js
       - run: node --check scripts/bench-local.js
       - run: node --check scripts/restore-fixture.js
+      - run: node --check scripts/bench-queue-pg.js
       - run: node --check scripts/migrate.js
       - run: node --check scripts/prune-jobs.js
       - run: node --check sdk/client.js
@@ -59,6 +60,11 @@ jobs:
       - run: npm install --no-audit --no-fund
       - run: npm run migrate
       - run: npm run test:postgres
+      - name: Benchmark disposable PostgreSQL queue
+        env:
+          CACHELOOM_BENCH_TEST: '1'
+          BENCH_JOBS: '80'
+        run: npm run bench:pg
 
   restore:
     runs-on: ubuntu-latest
