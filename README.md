@@ -2,7 +2,7 @@
 
 **Build infrastructure you own.** A free, self-hostable foundation for a multi-project cache, session, and job platform.
 
-> **Status: v0.4.0 / experimental.** PostgreSQL-backed durable keys are now available as an opt-in backend. CacheLoom is not Redis-protocol-compatible and cannot be used as a drop-in BullMQ backend. Do not move production authentication or notification queues until operational and failure-recovery testing is complete.
+> **Status: v0.5.0 / experimental.** PostgreSQL-backed durable keys are now available as an opt-in backend. CacheLoom is not Redis-protocol-compatible and cannot be used as a drop-in BullMQ backend. Do not move production authentication or notification queues until operational and failure-recovery testing is complete.
 
 ## Available today
 
@@ -198,3 +198,61 @@ const recent = await client.listJobs({ queue: 'emails', status: 'dead', limit: 2
 **Current limitations:** The dashboard is read-only, the worker SDK does not
 guarantee exactly-once execution, and free PostgreSQL hosting can impose usage
 and connection limits. No production Auth/Notification migration has happened.
+
+## Security and retention (v0.5.0)
+
+CacheLoom accepts either one API key or up to three keys per project:
+
+```bash
+export CACHELOOM_API_KEYS='{"auth":["old-secret-with-at-least-32-characters","new-secret-with-at-least-32-characters"]}'
+```
+
+Rotate safely: (1) deploy both secrets, (2) update and verify clients,
+(3) remove the old secret and restart every API instance. Keys are hashed
+in memory. **Do not commit secrets** or include them in logs. Duplicated
+secrets across projects are rejected on startup.
+
+`CACHELOOM_PROJECT_RPM=600` caps authenticated requests per project
+**per instance**, not across replicas. This is a best-effort burst guard,
+not a distributed security limit or billing quota. A global quota needs
+PostgreSQL-backed accounting, request admission, and load tests. Restrict
+network exposure and use HTTPS before putting the service online.
+
+### Job retention
+
+Old completed and cancelled jobs can be pruned in limited batches; dead,
+pending and running jobs are never deleted by this command. It defaults
+to a dry run:
+
+```bash
+export CACHELOOM_PROJECT=auth
+export CACHELOOM_RETENTION_DAYS=30
+npm run prune:jobs
+npm run prune:jobs -- --apply
+```
+
+**Warning:** Deleting jobs also releases their original idempotency keys.
+Choose a retention window longer than the longest client retry/replay window.
+Back up the database before enabling deletion. There is no automatic pruning.
+
+### PostgreSQL backup and recovery runbook
+
+For local PostgreSQL with standard tools installed:
+
+```bash
+# Use a trusted host and keep database credentials out of shell history.
+pg_dump --format=custom --no-owner --file=cacheloom.backup "$DATABASE_URL"
+
+# Restore only into a fresh, isolated database first.
+pg_restore --no-owner --dbname="$RESTORE_DATABASE_URL" cacheloom.backup
+```
+
+After restoring, run `npm run migrate` using the restored database URL,
+then verify `/ready`, a sample key read and queue status/metrics. Never
+overwrite a live database during a rehearsal. Confirm backups are encrypted,
+access-controlled, and regularly tested; `pg_dump` by itself is not a
+managed backup service. Database restoration may replay recently accepted jobs;
+external side effects must remain idempotent.
+
+CacheLoom continues to be experimental. No production migration or paid
+service is included in this release.
