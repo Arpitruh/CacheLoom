@@ -2,7 +2,7 @@
 
 **Build infrastructure you own.** A free, self-hostable foundation for a multi-project cache, session, and job platform.
 
-> **Status: v0.8.0 / experimental.** PostgreSQL-backed durable keys are now available as an opt-in backend. CacheLoom is not Redis-protocol-compatible and cannot be used as a drop-in BullMQ backend. Do not move production authentication or notification queues until operational and failure-recovery testing is complete.
+> **Status: v0.9.0 / experimental.** PostgreSQL-backed durable keys are now available as an opt-in backend. CacheLoom is not Redis-protocol-compatible and cannot be used as a drop-in BullMQ backend. Do not move production authentication or notification queues until operational and failure-recovery testing is complete.
 
 ## Available today
 
@@ -401,3 +401,21 @@ after adapting Notification Service's relay, readiness, reconciler and worker
 to preserve the notification database's delivery safety checks. Prove restart
 recovery and provider-acceptance ambiguity with mocked providers before
 even discussing a production cutover.
+
+## Notification Service contract checks (v0.9.0)
+
+CacheLoom tests now verify the job body produced by the new
+non-production Notification Service mirror, including nested metadata-only
+payloads, outbox-ID deduplication, and notification state handling.
+
+See [Notification Service staging PR #12](https://github.com/Arpitruh/Notification-Service/pull/12).
+That draft adds a feature flag to the **real outbox relay**. BullMQ and
+PostgreSQL remain authoritative: the mirror starts only after the outbox
+commit and never changes notification status or dispatches email/SMS.
+The PR's integration tests exercise Redis job-loss reconciliation against
+disposable PostgreSQL and Redis with the CacheLoom request mocked.
+
+This is staging coverage, **not a deployed full end-to-end cutover**.
+The Notification Service PR stays unmerged pending a deliberate staging
+deployment and review. Production remains on BullMQ/Redis. Do not enable
+`CACHELOOM_STAGING_SHADOW` in production.
