@@ -41,6 +41,14 @@ export class PostgresJobQueue {
   }
 
   async claim({ project, queue, limit = 1, leaseSeconds = this.defaultLeaseSeconds }) {
+    // A worker can crash on its last permitted attempt. Retire these leases
+    // instead of re-running them forever each time another worker polls.
+    await this.pool.query(`
+      UPDATE cacheloom_jobs SET status='dead',locked_until=NULL,lease_token=NULL,
+        updated_at=clock_timestamp(),last_error=COALESCE(last_error,'Worker lease expired')
+      WHERE project=$1 AND queue_name=$2 AND status='running'
+        AND locked_until < clock_timestamp() AND attempts >= max_attempts
+    `, [project,queue]);
     // SKIP LOCKED prevents two pollers claiming the same due job, without
     // serializing the entire queue behind one busy worker.
     const result = await this.pool.query(`
@@ -48,7 +56,7 @@ export class PostgresJobQueue {
         SELECT id FROM cacheloom_jobs
         WHERE project=$1 AND queue_name=$2
           AND ((status='pending' AND run_at <= clock_timestamp())
-             OR (status='running' AND locked_until < clock_timestamp()))
+             OR (status='running' AND locked_until < clock_timestamp() AND attempts < max_attempts))
         ORDER BY priority DESC,run_at,created_at
         LIMIT $3
         FOR UPDATE SKIP LOCKED
