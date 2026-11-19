@@ -15,12 +15,11 @@ test('Notification Service staging shadow uses the exact HTTP job contract', () 
     recipient: 'private@example.test', // This value must never leave the original service.
   }, { now: Date.parse('2026-11-19T12:00:00Z') });
   assert.equal(mapped.queue, NOTIFICATION_STAGING_QUEUE);
-  assert.deepEqual({ command: 'ENQUEUE', queue: mapped.queue, ...mapped.payload,
+  assert.deepEqual({ command: 'ENQUEUE', queue: mapped.queue, payload: mapped.payload,
     ...mapped.options }, {
     command: 'ENQUEUE',
     queue: NOTIFICATION_STAGING_QUEUE,
-    notificationId,
-    outboxId,
+    payload: { notificationId, outboxId },
     idempotencyKey: outboxId,
     priority: 7,
     maxAttempts: 3,
