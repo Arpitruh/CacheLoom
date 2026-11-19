@@ -143,7 +143,7 @@ async function dispatchJobCommand(jobs, project, body) {
 
 export function createCacheloomServer({ keys, maxKeys = 10000,
   store = new VolatileStore({ maxKeys }), jobs = null,
-  maxRequestsPerMinute = 600 } = {}) {
+  maxRequestsPerMinute = 600, distributedLimiter = null } = {}) {
   if (!Number.isSafeInteger(maxRequestsPerMinute) || maxRequestsPerMinute < 1 || maxRequestsPerMinute > 100000)
     throw new Error('Invalid per-project request limit');
   const authKeys = Array.isArray(keys) ? keys : parseKeys(keys);
@@ -184,6 +184,7 @@ export function createCacheloomServer({ keys, maxKeys = 10000,
         try {
           if (store.ping) await store.ping();
           if (jobs) await jobs.ready();
+          if (distributedLimiter) await distributedLimiter.ready();
           return send(res, 200, { status: 'ready' });
         } catch {
           return failure(res, 503, 'STORAGE_UNAVAILABLE');
@@ -193,7 +194,10 @@ export function createCacheloomServer({ keys, maxKeys = 10000,
         return failure(res, 404, 'NOT_FOUND');
       const project = authenticate(req.headers.authorization, authKeys);
       if (!project) return failure(res, 401, 'UNAUTHORIZED');
-      if (!limitProject(project)) return failure(res, 429, 'PROJECT_RATE_LIMITED');
+      // In PostgreSQL mode every replica consumes the same atomic budget.
+      // Memory mode keeps its lightweight per-instance guard.
+      if (distributedLimiter ? !(await distributedLimiter.consume(project)) : !limitProject(project))
+        return failure(res, 429, 'PROJECT_RATE_LIMITED');
       if (!String(req.headers['content-type'] || '').toLowerCase().startsWith('application/json')) return failure(res, 415, 'CONTENT_TYPE_REQUIRED');
       const body = await readJSON(req);
       if (!body || typeof body !== 'object' || Array.isArray(body)) return failure(res, 400, 'INVALID_REQUEST');
@@ -258,9 +262,16 @@ if (process.argv[1] && import.meta.url === pathToFileURL(resolve(process.argv[1]
     ? new (await import('./job-queue.js')).PostgresJobQueue({ pool: store.pool })
     : null;
   if (jobs) await jobs.ready();
+  const distributedLimiter = backend === 'postgres'
+    ? new (await import('./rate-limit.js')).PostgresRateLimiter({
+      pool: store.pool, requestsPerMinute: Number(process.env.CACHELOOM_PROJECT_RPM ?? 600),
+    })
+    : null;
+  if (distributedLimiter) await distributedLimiter.ready();
   const server = createCacheloomServer({
     keys: process.env.CACHELOOM_API_KEYS, store, jobs,
     maxRequestsPerMinute: Number(process.env.CACHELOOM_PROJECT_RPM ?? 600),
+    distributedLimiter,
   });
   server.listen(port, host, () => console.log(`[cacheloom] ${backend} backend listening on ${host}:${port}`));
   for (const signal of ['SIGINT', 'SIGTERM']) process.once(signal, () => {
