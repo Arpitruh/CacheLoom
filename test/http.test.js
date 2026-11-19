@@ -31,3 +31,17 @@ test('auth and validation', async () => withServer(async url => {
   assert.equal(await a.del('x'), true);
   assert.equal(await a.ttl('x'), -2);
 }));
+
+
+test('dashboard is read-only and protected by a restrictive content security policy', async () => withServer(async url => {
+  const response = await fetch(url + '/dashboard');
+  assert.equal(response.status, 200);
+  assert.match(response.headers.get('content-security-policy'), /frame-ancestors 'none'/);
+  assert.match(response.headers.get('cache-control'), /no-store/);
+  const html = await response.text();
+  assert.match(html, /Queue Monitor/);
+  assert.doesNotMatch(html, /localStorage|sessionStorage/);
+  const script = await fetch(url + '/dashboard.js');
+  assert.equal(script.status, 200);
+  assert.match(script.headers.get('x-content-type-options'), /nosniff/);
+}));
