@@ -1,5 +1,7 @@
 import http from 'node:http';
 import crypto from 'node:crypto';
+import { resolve } from 'node:path';
+import { pathToFileURL } from 'node:url';
 import { VolatileStore } from './store.js';
 
 const MAX_BODY = 64 * 1024;
@@ -114,7 +116,7 @@ export function createCacheloomServer({ keys, maxKeys = 10000, store = new Volat
   server.on('close', () => clearInterval(interval));
   return server;
 }
-if (process.argv[1] && import.meta.url === new URL(`file://${process.argv[1]}`).href) {
+if (process.argv[1] && import.meta.url === pathToFileURL(resolve(process.argv[1])).href) {
   const host = process.env.HOST ?? '127.0.0.1';
   const port = Number(process.env.PORT ?? 8080);
   if (!Number.isInteger(port) || port < 1 || port > 65535) throw new Error('Invalid PORT');
