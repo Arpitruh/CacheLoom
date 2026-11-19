@@ -1,0 +1,39 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>CacheLoom — Queue Monitor</title>
+  <link rel="stylesheet" href="/dashboard.css">
+  <script src="/dashboard.js" defer></script>
+</head>
+<body>
+  <main class="container">
+    <header>
+      <div class="brand">CacheLoom <span>Queue Monitor</span></div>
+      <p>Observe queue activity without exposing job payloads or storing API keys.</p>
+    </header>
+    <form id="filters" autocomplete="off">
+      <label>Project API key <input name="apiKey" id="key" type="password" required autocomplete="off" placeholder="Enter your project key"></label>
+      <label>Queue (optional) <input name="queue" id="queue" placeholder="e.g. emails" pattern="[A-Za-z0-9_-]{1,80}"></label>
+      <button type="submit">Load dashboard</button>
+      <button type="button" id="clear">Clear</button>
+    </form>
+    <p id="status" role="status">Enter a project API key to load queue data.</p>
+    <section aria-label="Queue status">
+      <h2>Job counts</h2>
+      <div id="stats" class="cards"></div>
+    </section>
+    <section aria-label="Recent jobs">
+      <h2>Recent jobs</h2>
+      <div class="table-wrap">
+        <table>
+          <thead><tr><th>Job ID</th><th>Queue</th><th>Status</th><th>Attempts</th><th>Scheduled</th></tr></thead>
+          <tbody id="jobs"></tbody>
+        </table>
+      </div>
+    </section>
+    <footer>Read-only view · no background polling · keys stay in this page's memory</footer>
+  </main>
+</body>
+</html>
