@@ -29,7 +29,10 @@ export class CacheloomClient {
   queueMetrics(queue) { return this.jobCommand('METRICS', queue ? { queue } : {}); }
   listJobs(options = {}) { return this.jobCommand('LIST', options); }
   cancelJob(id) { return this.jobCommand('CANCEL', { id }); }
-  replayJob(id) { return this.jobCommand('REPLAY', { id }); }
+  replayJob(id, reason, acknowledgeDuplicateRisk = false) {
+    return this.jobCommand('REPLAY', { id, reason, acknowledgeDuplicateRisk });
+  }
+  replayAudit(limit = 25) { return this.jobCommand('REPLAY_AUDIT', { limit }); }
   get(key) { return this.command('GET', key); }
   set(key, value, options = {}) { return this.command('SET', key, { value, ...options }); }
   del(key) { return this.command('DEL', key); }

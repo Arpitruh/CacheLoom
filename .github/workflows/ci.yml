@@ -25,6 +25,8 @@ jobs:
       - run: node --check src/job-queue.js
       - run: node --check src/rate-limit.js
       - run: node --check scripts/bench-local.js
+      - run: node --check scripts/restore-fixture.js
+      - run: node --check scripts/bench-queue-pg.js
       - run: node --check scripts/migrate.js
       - run: node --check scripts/prune-jobs.js
       - run: node --check sdk/client.js
@@ -58,3 +60,47 @@ jobs:
       - run: npm install --no-audit --no-fund
       - run: npm run migrate
       - run: npm run test:postgres
+      - name: Benchmark disposable PostgreSQL queue
+        env:
+          CACHELOOM_BENCH_TEST: '1'
+          BENCH_JOBS: '80'
+        run: npm run bench:pg
+
+  restore:
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: test-password
+          POSTGRES_DB: cacheloom_test
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U postgres -d cacheloom_test"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+    env:
+      PGPASSWORD: test-password
+      CACHELOOM_RESTORE_TEST: '1'
+      DATABASE_URL: postgresql://postgres:test-password@localhost:5432/cacheloom_test
+      RESTORE_DATABASE_URL: postgresql://postgres:test-password@localhost:5432/cacheloom_restore_test
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - run: npm install --no-audit --no-fund
+      - run: npm run migrate
+      - name: Seed KV, queue, and quota records
+        run: node scripts/restore-fixture.js seed
+      - name: Back up and restore into a completely separate database
+        run: |
+          # Match the database server's major version so the backup is restorable.
+          docker run --rm --network host -v /tmp:/tmp -e PGPASSWORD="$PGPASSWORD" postgres:16 pg_dump --format=custom --no-owner --dbname="$DATABASE_URL" --file=/tmp/cacheloom-ci.backup
+          docker run --rm --network host -e PGPASSWORD="$PGPASSWORD" postgres:16 psql "$DATABASE_URL" -v ON_ERROR_STOP=1 -c "CREATE DATABASE cacheloom_restore_test"
+          docker run --rm --network host -v /tmp:/tmp -e PGPASSWORD="$PGPASSWORD" postgres:16 pg_restore --exit-on-error --no-owner --dbname="$RESTORE_DATABASE_URL" /tmp/cacheloom-ci.backup
+      - name: Verify restored state and process the restored job
+        run: node scripts/restore-fixture.js verify

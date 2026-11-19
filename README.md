@@ -2,7 +2,7 @@
 
 **Build infrastructure you own.** A free, self-hostable foundation for a multi-project cache, session, and job platform.
 
-> **Status: v0.6.0 / experimental.** PostgreSQL-backed durable keys are now available as an opt-in backend. CacheLoom is not Redis-protocol-compatible and cannot be used as a drop-in BullMQ backend. Do not move production authentication or notification queues until operational and failure-recovery testing is complete.
+> **Status: v0.7.0 / experimental.** PostgreSQL-backed durable keys are now available as an opt-in backend. CacheLoom is not Redis-protocol-compatible and cannot be used as a drop-in BullMQ backend. Do not move production authentication or notification queues until operational and failure-recovery testing is complete.
 
 ## Available today
 
@@ -296,3 +296,53 @@ It is **not** a published performance benchmark or a production capacity
 claim. Rate limits apply during benchmarking; choose a test-only budget.
 
 No paid service or production Notification/Auth migration is part of v0.6.
+
+## Restore verification, audited replay and performance checks (v0.7.0)
+
+### Verified PostgreSQL restoration in CI
+
+GitHub Actions now seeds test-only key/value, job, and rate-limit records,
+takes a `pg_dump` custom-format backup, restores into a **separate**
+`cacheloom_restore_test` database, and verifies that the restored job can
+be claimed and acknowledged. This is a repeatable, disposable restore drill,
+not a guarantee about a particular hosted backup provider or its retention.
+
+CI never connects to a production database for this test. The restore
+fixture refuses any database URL without the expected test database name.
+
+### Audited manual replay
+
+A dead job may have already triggered an external side effect before the
+original worker lost its lease. Replaying it requires an operator reason
+(10–300 characters) and explicit acceptance of the duplicate-risk tradeoff.
+
+```js
+await client.replayJob(
+  jobId,
+  'Checked provider records and confirmed that no notification was sent',
+  true, // The operator accepts potential duplicate-delivery risk.
+);
+const recentReplayReasons = await client.replayAudit(25);
+```
+
+Both the status change and audit record are committed in the same SQL
+transaction. Only successful replays write audit rows, and the history is
+scoped to the authenticated project. **Breaking API change:** old calls to
+`REPLAY` without a reason and acknowledgment are rejected.
+
+### Local performance exercise
+
+```bash
+# Disposable cacheloom_test database ONLY. Run migrations first.
+CACHELOOM_BENCH_TEST=1 BENCH_JOBS=100 npm run bench:pg
+```
+
+The benchmark covers enqueue → claim → acknowledgment and reports total
+duration and claim-batch p50/p95. It cleans up its own test jobs, and does
+not establish production capacity. CI runs a small bounded version on
+PostgreSQL 16. Test database credentials and TLS should remain securely
+configured; never run the benchmark against hosted production data.
+
+**Still to do before production migration:** repeat restore drills against
+your actual staging infrastructure; measure representative multi-worker
+traffic; add provider-side idempotency checks and operational alerts.

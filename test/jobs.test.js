@@ -81,7 +81,7 @@ test('transient failures retry, exhausted jobs die, and manual replay works', { 
   const second = (await jobs.claim({project,queue}))[0];
   const dead = await jobs.fail({project,id:second.id,leaseToken:second.lease_token,error:'permanent',retryable:true});
   assert.equal(dead.status,'dead');
-  assert.equal(await jobs.replay({project,id:enqueued.id}),true);
+  assert.equal(await jobs.replay({project,id:enqueued.id,reason:'Retry after the provider issue was investigated',acknowledgeDuplicateRisk:true}),true);
   const third = (await jobs.claim({project,queue}))[0];
   assert.equal(third.attempts,1);
   assert.equal(await jobs.fail({project,id:third.id,leaseToken:third.lease_token,error:'do not retry',retryable:false}).then(x=>x.status),'dead');

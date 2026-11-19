@@ -132,14 +132,51 @@ export class PostgresJobQueue {
     return result.rowCount === 1;
   }
 
-  async replay({ project, id }) {
-    // Never replay an unknown/in-flight side effect; only explicitly dead jobs.
+  async replay({ project, id, reason, acknowledgeDuplicateRisk = false }) {
+    // Dead jobs are ambiguous: the worker might have completed the side
+    // effect before its lease expired. Require an explicit operator decision.
+    if (typeof reason !== 'string' || reason.trim().length < 10 ||
+      reason.trim().length > 300 || acknowledgeDuplicateRisk !== true) {
+      const error = new Error('REPLAY_REQUIRES_REASON_AND_RISK_ACKNOWLEDGEMENT');
+      error.status = 400;
+      throw error;
+    }
+    const client = await this.pool.connect();
+    try {
+      await client.query('BEGIN');
+      const result = await client.query(`
+        UPDATE cacheloom_jobs SET status='pending',attempts=0,
+          last_error=NULL,run_at=clock_timestamp(),updated_at=clock_timestamp()
+        WHERE project=$1 AND id=$2 AND status='dead' RETURNING id
+      `, [project,id]);
+      if (result.rowCount) {
+        // The status change and its audit row commit together. An exception
+        // cannot leave behind a replay with no explanation.
+        await client.query(`
+          INSERT INTO cacheloom_job_audit(project,job_id,action,reason)
+          VALUES($1,$2,'replay',$3)
+        `, [project,id,reason.trim()]);
+      }
+      await client.query('COMMIT');
+      return result.rowCount === 1;
+    } catch (error) {
+      await client.query('ROLLBACK');
+      throw error;
+    } finally {
+      client.release();
+    }
+  }
+
+  async replayAudit({ project, limit = 25 }) {
+    if (!Number.isSafeInteger(limit) || limit < 1 || limit > 100) {
+      throw new Error('INVALID_AUDIT_LIMIT');
+    }
     const result = await this.pool.query(`
-      UPDATE cacheloom_jobs SET status='pending',attempts=0,
-        last_error=NULL,run_at=clock_timestamp(),updated_at=clock_timestamp()
-      WHERE project=$1 AND id=$2 AND status='dead' RETURNING id
-    `, [project,id]);
-    return result.rowCount === 1;
+      SELECT job_id,action,reason,occurred_at
+      FROM cacheloom_job_audit
+      WHERE project=$1 ORDER BY occurred_at DESC,id DESC LIMIT $2
+    `, [project,limit]);
+    return result.rows;
   }
   async metrics({ project, queue = null }) {
     // Returning aggregates rather than payloads makes monitoring safe for
