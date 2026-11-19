@@ -12,9 +12,9 @@ export class CacheloomClient {
       method: 'POST', headers: { authorization: `Bearer ${this.apiKey}`, 'content-type': 'application/json' },
       body: JSON.stringify(body), signal: AbortSignal.timeout(this.timeoutMs),
     });
-    const body = await response.json();
-    if (!response.ok) throw new Error(`Cacheloom ${response.status}: ${body.error}`);
-    return body.result;
+    const data = await response.json();
+    if (!response.ok) throw new Error(`Cacheloom ${response.status}: ${data.error}`);
+    return data.result;
   }
   command(command, key, fields = {}) { return this.request(this.url, { command, key, ...fields }); }
   jobCommand(command, fields = {}) { return this.request(this.jobsUrl, { command, ...fields }); }
