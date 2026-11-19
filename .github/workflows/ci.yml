@@ -22,6 +22,8 @@ jobs:
       - run: node --check src/server.js
       - run: node --check src/store.js
       - run: node --check src/pg-store.js
+      - run: node --check src/job-queue.js
+      - run: node --check scripts/migrate.js
       - run: node --check sdk/client.js
 
   postgres:
