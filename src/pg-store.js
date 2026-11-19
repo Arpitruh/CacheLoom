@@ -11,7 +11,10 @@ export class PostgresStore {
     this.ownsPool = ownsPool;
   }
 
-  async ping() { await this.pool.query('SELECT 1'); }
+  async ping() {
+    // A working connection isn't enough if someone forgot to apply the schema.
+    await this.pool.query('SELECT 1 FROM cacheloom_kv LIMIT 1');
+  }
 
   async get(key) {
     const { rows } = await this.pool.query(
