@@ -1,6 +1,6 @@
 {
   "name": "cacheloom",
-  "version": "0.5.0",
+  "version": "0.6.0",
   "private": true,
   "type": "module",
   "engines": { "node": ">=20" },
@@ -8,9 +8,10 @@
     "start": "node src/server.js",
     "dev": "node --watch src/server.js",
     "test": "node --test test/*.test.js",
-    "test:postgres": "node --test test/postgres.test.js test/jobs.test.js",
+    "test:postgres": "node --test test/postgres.test.js test/jobs.test.js test/rate-limit.test.js",
     "migrate": "node scripts/migrate.js",
-    "prune:jobs": "node scripts/prune-jobs.js"
+    "prune:jobs": "node scripts/prune-jobs.js",
+    "bench:local": "node scripts/bench-local.js"
   },
   "dependencies": { "pg": "^8.16.3" }
 }
