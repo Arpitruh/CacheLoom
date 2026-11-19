@@ -15,25 +15,43 @@ function send(res, status, payload) {
   res.writeHead(status, { 'content-type': 'application/json; charset=utf-8', 'cache-control': 'no-store' });
   res.end(JSON.stringify(payload));
 }
-function parseKeys(input) {
+/** Multiple secrets per project make zero-downtime key rotation possible.
+ * Deploy both keys, move clients, then remove the old key and restart.
+ */
+export function parseKeys(input) {
   if (!input) throw new Error('CACHELOOM_API_KEYS is required');
   const data = JSON.parse(input);
-  if (!data || Array.isArray(data) || typeof data !== 'object' || !Object.keys(data).length) throw new Error('Invalid key map');
-  const entries = Object.entries(data);
-  for (const [project, key] of entries) {
-    if (!/^[a-zA-Z0-9_-]{1,64}$/.test(project) || typeof key !== 'string' || key.length < 32) {
-      throw new Error('Each project needs a valid ID and a secret of at least 32 characters');
+  if (!data || Array.isArray(data) || typeof data !== 'object' || !Object.keys(data).length)
+    throw new Error('Invalid key map');
+  const digests = new Set();
+  const entries = [];
+  for (const [project, configured] of Object.entries(data)) {
+    if (!/^[a-zA-Z0-9_-]{1,64}$/.test(project)) throw new Error('Invalid project ID');
+    const secrets = typeof configured === 'string' ? [configured] : configured;
+    if (!Array.isArray(secrets) || secrets.length < 1 || secrets.length > 3 ||
+      secrets.some(secret => typeof secret !== 'string' || secret.length < 32))
+      throw new Error('Each project needs 1-3 secrets of at least 32 characters');
+    for (const secret of secrets) {
+      const digest = crypto.createHash('sha256').update(secret).digest('hex');
+      // Duplicate secrets across projects could route a request to the wrong tenant.
+      if (digests.has(digest)) throw new Error('Duplicate API secrets are not allowed');
+      digests.add(digest);
+      entries.push({ project, digest: Buffer.from(digest, 'hex') });
     }
   }
-  return entries.map(([project, secret]) => ({ project, digest: crypto.createHash('sha256').update(secret).digest() }));
+  return entries;
 }
 function authenticate(header, keys) {
   if (typeof header !== 'string' || !header.startsWith('Bearer ')) return null;
   const token = header.slice(7);
   if (!token || token.length > 512) return null;
   const digest = crypto.createHash('sha256').update(token).digest();
-  for (const item of keys) if (crypto.timingSafeEqual(digest, item.digest)) return item.project;
-  return null;
+  // Always examine all configured keys, not just the first matching project.
+  let project = null;
+  for (const item of keys) {
+    if (crypto.timingSafeEqual(digest, item.digest)) project = item.project;
+  }
+  return project;
 }
 function validKey(key) { return typeof key === 'string' && key.length > 0 && key.length <= MAX_KEY_LENGTH; }
 function validTTL(n) { return Number.isSafeInteger(n) && n >= 1 && n <= MAX_TTL; }
@@ -123,8 +141,22 @@ async function dispatchJobCommand(jobs, project, body) {
   }
 }
 
-export function createCacheloomServer({ keys, maxKeys = 10000, store = new VolatileStore({ maxKeys }), jobs = null }) {
+export function createCacheloomServer({ keys, maxKeys = 10000,
+  store = new VolatileStore({ maxKeys }), jobs = null,
+  maxRequestsPerMinute = 600 } = {}) {
+  if (!Number.isSafeInteger(maxRequestsPerMinute) || maxRequestsPerMinute < 1 || maxRequestsPerMinute > 100000)
+    throw new Error('Invalid per-project request limit');
   const authKeys = Array.isArray(keys) ? keys : parseKeys(keys);
+  // This protects a *single server instance*. Distributed quotas need a
+  // shared database counter, so never treat this as a global rate limit.
+  const buckets = new Map();
+  const limitProject = project => {
+    const minute = Math.floor(Date.now() / 60000);
+    const old = buckets.get(project);
+    const count = old?.minute === minute ? old.count + 1 : 1;
+    buckets.set(project, { minute, count });
+    return count <= maxRequestsPerMinute;
+  };
   const interval = setInterval(() => {
     // A temporary database outage should never become an unhandled timer error.
     void Promise.resolve().then(() => store.sweep())
@@ -161,6 +193,7 @@ export function createCacheloomServer({ keys, maxKeys = 10000, store = new Volat
         return failure(res, 404, 'NOT_FOUND');
       const project = authenticate(req.headers.authorization, authKeys);
       if (!project) return failure(res, 401, 'UNAUTHORIZED');
+      if (!limitProject(project)) return failure(res, 429, 'PROJECT_RATE_LIMITED');
       if (!String(req.headers['content-type'] || '').toLowerCase().startsWith('application/json')) return failure(res, 415, 'CONTENT_TYPE_REQUIRED');
       const body = await readJSON(req);
       if (!body || typeof body !== 'object' || Array.isArray(body)) return failure(res, 400, 'INVALID_REQUEST');
@@ -205,7 +238,7 @@ export function createCacheloomServer({ keys, maxKeys = 10000, store = new Volat
       }
     }
   });
-  server.on('close', () => clearInterval(interval));
+  server.on('close', () => { clearInterval(interval); buckets.clear(); });
   return server;
 }
 if (process.argv[1] && import.meta.url === pathToFileURL(resolve(process.argv[1])).href) {
@@ -225,7 +258,10 @@ if (process.argv[1] && import.meta.url === pathToFileURL(resolve(process.argv[1]
     ? new (await import('./job-queue.js')).PostgresJobQueue({ pool: store.pool })
     : null;
   if (jobs) await jobs.ready();
-  const server = createCacheloomServer({ keys: process.env.CACHELOOM_API_KEYS, store, jobs });
+  const server = createCacheloomServer({
+    keys: process.env.CACHELOOM_API_KEYS, store, jobs,
+    maxRequestsPerMinute: Number(process.env.CACHELOOM_PROJECT_RPM ?? 600),
+  });
   server.listen(port, host, () => console.log(`[cacheloom] ${backend} backend listening on ${host}:${port}`));
   for (const signal of ['SIGINT', 'SIGTERM']) process.once(signal, () => {
     server.close(() => { void Promise.resolve(store.close?.()).then(() => process.exit(0)); });

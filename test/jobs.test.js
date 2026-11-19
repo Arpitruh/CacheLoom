@@ -136,3 +136,30 @@ test('metrics and recent jobs stay inside the authenticated project', { skip: !e
     assert.equal((await client.listJobs({ queue }))[0].id, first.id);
   } finally { await new Promise(resolve => server.close(resolve)); }
 });
+
+
+test('retention previews terminal jobs and only deletes the project that opted in', { skip: !enabled }, async () => {
+  const queue = 'retention_' + randomUUID().slice(0, 8);
+  const kept = await jobs.enqueue({ project, queue, payload: { operation: 'keep' } });
+  const removed = await jobs.enqueue({ project, queue, payload: { operation: 'remove' },
+    idempotencyKey: 'cleanup-key' });
+  const other = await jobs.enqueue({ project: otherProject, queue, payload: { operation: 'other' } });
+  const a = (await jobs.claim({ project, queue, limit: 2 }));
+  for (const row of a) {
+    if (row.id === removed.id) await jobs.acknowledge({ project, id: row.id, leaseToken: row.lease_token });
+    else await jobs.fail({ project, id: row.id, leaseToken: row.lease_token,
+      error: 'Needs operator review', retryable: false });
+  }
+  const [outside] = await jobs.claim({ project: otherProject, queue });
+  await jobs.acknowledge({ project: otherProject, id: outside.id, leaseToken: outside.lease_token });
+  await pool.query("UPDATE cacheloom_jobs SET updated_at=clock_timestamp()-interval '40 days' WHERE id=ANY($1::uuid[])",
+    [[kept.id, removed.id, other.id]]);
+  const preview = await jobs.prune({ project, olderThanDays: 30 });
+  assert.equal(preview.dryRun, true);
+  assert.equal(preview.eligible >= 1, true);
+  assert.equal((await jobs.get({ project, id: removed.id })).status, 'completed');
+  assert.equal((await jobs.prune({ project, olderThanDays: 30, dryRun: false })).deleted, 1);
+  assert.equal(await jobs.get({ project, id: removed.id }), null);
+  assert.equal((await jobs.get({ project, id: kept.id })).status, 'dead');
+  assert.equal((await jobs.get({ project: otherProject, id: other.id })).status, 'completed');
+});

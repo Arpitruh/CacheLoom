@@ -172,4 +172,33 @@ export class PostgresJobQueue {
     return result.rows;
   }
 
+  async prune({ project, olderThanDays = 30, limit = 500, dryRun = true }) {
+    if (!Number.isSafeInteger(olderThanDays) || olderThanDays < 1 || olderThanDays > 3650 ||
+      !Number.isSafeInteger(limit) || limit < 1 || limit > 1000 ||
+      typeof dryRun !== 'boolean') throw new Error('INVALID_RETENTION_SETTINGS');
+    // We deliberately retain dead jobs for operator investigation. Completed
+    // and cancelled jobs can be removed, but their idempotency keys then become
+    // reusable, which is why this is opt-in rather than automatic housekeeping.
+    if (dryRun) {
+      const result = await this.pool.query(`
+        SELECT count(*)::integer AS eligible FROM cacheloom_jobs
+        WHERE project=$1 AND status IN ('completed','cancelled')
+          AND updated_at < clock_timestamp()-($2::integer * interval '1 day')
+      `, [project,olderThanDays]);
+      return { dryRun: true, eligible: result.rows[0].eligible, deleted: 0 };
+    }
+    const result = await this.pool.query(`
+      WITH victims AS (
+        SELECT id FROM cacheloom_jobs
+        WHERE project=$1 AND status IN ('completed','cancelled')
+          AND updated_at < clock_timestamp()-($2::integer * interval '1 day')
+        ORDER BY updated_at,id
+        LIMIT $3 FOR UPDATE SKIP LOCKED
+      )
+      DELETE FROM cacheloom_jobs j USING victims v WHERE j.id=v.id
+      RETURNING j.id
+    `, [project,olderThanDays,limit]);
+    return { dryRun: false, deleted: result.rowCount };
+  }
+
 }
