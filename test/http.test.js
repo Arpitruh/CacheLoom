@@ -45,3 +45,39 @@ test('dashboard is read-only and protected by a restrictive content security pol
   assert.equal(script.status, 200);
   assert.match(script.headers.get('x-content-type-options'), /nosniff/);
 }));
+
+
+test('rotating secrets can overlap without mixing project data', async () => {
+  const rotating = 'new-secret-that-is-long-enough-for-rotation-123';
+  const { parseKeys } = await import('../src/server.js');
+  const server = createCacheloomServer({
+    keys: JSON.stringify({ alpha: [K1, rotating], beta: K2 }),
+  });
+  await new Promise(resolve => server.listen(0, '127.0.0.1', resolve));
+  try {
+    const url = 'http://127.0.0.1:' + server.address().port;
+    const oldClient = new CacheloomClient({ url, apiKey: K1 });
+    const newClient = new CacheloomClient({ url, apiKey: rotating });
+    const beta = new CacheloomClient({ url, apiKey: K2 });
+    await oldClient.set('rotation-test', 42);
+    assert.equal(await newClient.get('rotation-test'), 42);
+    assert.equal(await beta.get('rotation-test'), null);
+    assert.throws(() => parseKeys(JSON.stringify({ a: K1, b: K1 })), /Duplicate API secrets/);
+  } finally { await new Promise(resolve => server.close(resolve)); }
+});
+
+test('request limit is scoped to a project and denies excess traffic', async () => {
+  const server = createCacheloomServer({
+    keys: JSON.stringify({ alpha: K1, beta: K2 }), maxRequestsPerMinute: 2,
+  });
+  await new Promise(resolve => server.listen(0, '127.0.0.1', resolve));
+  try {
+    const url = 'http://127.0.0.1:' + server.address().port;
+    const alpha = new CacheloomClient({ url, apiKey: K1 });
+    const beta = new CacheloomClient({ url, apiKey: K2 });
+    assert.equal(await alpha.get('x'), null);
+    assert.equal(await alpha.get('x'), null);
+    await assert.rejects(() => alpha.get('x'), /429/);
+    assert.equal(await beta.get('x'), null);
+  } finally { await new Promise(resolve => server.close(resolve)); }
+});
