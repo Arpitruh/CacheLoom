@@ -2,7 +2,7 @@
 
 **Build infrastructure you own.** A free, self-hostable foundation for a multi-project cache, session, and job platform.
 
-> **Status: v0.5.0 / experimental.** PostgreSQL-backed durable keys are now available as an opt-in backend. CacheLoom is not Redis-protocol-compatible and cannot be used as a drop-in BullMQ backend. Do not move production authentication or notification queues until operational and failure-recovery testing is complete.
+> **Status: v0.6.0 / experimental.** PostgreSQL-backed durable keys are now available as an opt-in backend. CacheLoom is not Redis-protocol-compatible and cannot be used as a drop-in BullMQ backend. Do not move production authentication or notification queues until operational and failure-recovery testing is complete.
 
 ## Available today
 
@@ -213,9 +213,10 @@ in memory. **Do not commit secrets** or include them in logs. Duplicated
 secrets across projects are rejected on startup.
 
 `CACHELOOM_PROJECT_RPM=600` caps authenticated requests per project
-**per instance**, not across replicas. This is a best-effort burst guard,
-not a distributed security limit or billing quota. A global quota needs
-PostgreSQL-backed accounting, request admission, and load tests. Restrict
+**across all PostgreSQL-backed replicas** using one atomic database row per
+project per minute. In memory mode the guard remains per instance. This is
+a fixed-window limit, not a billing system or a fine-grained user-level quota.
+A global limit increases database write traffic, so monitor the free tier. Restrict
 network exposure and use HTTPS before putting the service online.
 
 ### Job retention
@@ -256,3 +257,42 @@ external side effects must remain idempotent.
 
 CacheLoom continues to be experimental. No production migration or paid
 service is included in this release.
+
+## Distributed quotas and recovery checks (v0.6.0)
+
+With `CACHELOOM_STORAGE=postgres`, `CACHELOOM_PROJECT_RPM` is an atomic
+per-project fixed-window request budget shared across every API replica using
+the same database. Request admission fails closed if the database counter
+cannot be updated. This trades some PostgreSQL write overhead for a consistent
+global limit. Memory mode still uses an inexpensive per-instance counter.
+
+Run `npm run migrate` before restarting a PostgreSQL-backed service to create
+the `cacheloom_rate_limits` table. CI tests competing requests across two
+independent connection pools and verifies that the limit cannot be exceeded.
+Counter cleanup is available through the `PostgresRateLimiter.prune()` API;
+automatic pruning is not enabled.
+
+### Simulated worker recovery
+
+PostgreSQL integration tests simulate a worker disappearing with a running
+job, then a second queue instance reclaiming the expired lease. The old
+worker's acknowledgement is rejected. This is not a full disaster-recovery or
+database-restore test and does not guarantee exactly-once external delivery.
+
+### Local load test
+
+Start a disposable local CacheLoom instance connected to a disposable
+PostgreSQL database. Then run:
+
+```bash
+export CACHELOOM_KEY='your-local-test-secret'
+CACHELOOM_BENCH_REQUESTS=100 CACHELOOM_BENCH_CONCURRENCY=5 npm run bench:local
+```
+
+The benchmark only accepts localhost addresses and reports throughput,
+p50/p95/p99 timings and failures. It creates delayed jobs in the database,
+which you should remove from the disposable test database afterward.
+It is **not** a published performance benchmark or a production capacity
+claim. Rate limits apply during benchmarking; choose a test-only budget.
+
+No paid service or production Notification/Auth migration is part of v0.6.

@@ -23,6 +23,8 @@ jobs:
       - run: node --check src/store.js
       - run: node --check src/pg-store.js
       - run: node --check src/job-queue.js
+      - run: node --check src/rate-limit.js
+      - run: node --check scripts/bench-local.js
       - run: node --check scripts/migrate.js
       - run: node --check scripts/prune-jobs.js
       - run: node --check sdk/client.js

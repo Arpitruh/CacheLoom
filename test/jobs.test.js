@@ -163,3 +163,21 @@ test('retention previews terminal jobs and only deletes the project that opted i
   assert.equal((await jobs.get({ project, id: kept.id })).status, 'dead');
   assert.equal((await jobs.get({ project: otherProject, id: other.id })).status, 'completed');
 });
+
+
+test('a restarted queue instance can recover a job after its worker lease expires', { skip: !enabled }, async () => {
+  const queue = 'restart_' + randomUUID().slice(0, 8);
+  const created = await jobs.enqueue({ project, queue, payload: { durable: true }, maxAttempts: 2 });
+  const first = (await jobs.claim({ project, queue, leaseSeconds: 5 }))[0];
+  assert.equal(first.id, created.id);
+  // Simulate the worker disappearing and the database clock reaching its lease.
+  await pool.query("UPDATE cacheloom_jobs SET locked_until=clock_timestamp()-interval '1 second' WHERE id=$1", [created.id]);
+  const replacement = new PostgresJobQueue({ pool });
+  const recovered = (await replacement.claim({ project, queue, leaseSeconds: 5 }))[0];
+  assert.equal(recovered.id, created.id);
+  assert.equal(recovered.attempts, 2);
+  assert.notEqual(recovered.lease_token, first.lease_token);
+  assert.equal(await jobs.acknowledge({ project,id:created.id,leaseToken:first.lease_token }), false);
+  assert.equal(await replacement.acknowledge({ project,id:created.id,leaseToken:recovered.lease_token }), true);
+  assert.equal((await jobs.get({ project,id:created.id })).status, 'completed');
+});
