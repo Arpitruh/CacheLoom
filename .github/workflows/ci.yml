@@ -93,15 +93,14 @@ jobs:
         with:
           node-version: '22'
       - run: npm install --no-audit --no-fund
-      - name: Install PostgreSQL backup tools
-        run: sudo apt-get update && sudo apt-get install -y postgresql-client
       - run: npm run migrate
       - name: Seed KV, queue, and quota records
         run: node scripts/restore-fixture.js seed
       - name: Back up and restore into a completely separate database
         run: |
-          pg_dump --format=custom --no-owner --dbname="$DATABASE_URL" --file=/tmp/cacheloom-ci.backup
-          psql "$DATABASE_URL" -v ON_ERROR_STOP=1 -c "CREATE DATABASE cacheloom_restore_test"
-          pg_restore --exit-on-error --no-owner --dbname="$RESTORE_DATABASE_URL" /tmp/cacheloom-ci.backup
+          # Match the database server's major version so the backup is restorable.
+          docker run --rm --network host -v /tmp:/tmp -e PGPASSWORD="$PGPASSWORD" postgres:16 pg_dump --format=custom --no-owner --dbname="$DATABASE_URL" --file=/tmp/cacheloom-ci.backup
+          docker run --rm --network host -e PGPASSWORD="$PGPASSWORD" postgres:16 psql "$DATABASE_URL" -v ON_ERROR_STOP=1 -c "CREATE DATABASE cacheloom_restore_test"
+          docker run --rm --network host -v /tmp:/tmp -e PGPASSWORD="$PGPASSWORD" postgres:16 pg_restore --exit-on-error --no-owner --dbname="$RESTORE_DATABASE_URL" /tmp/cacheloom-ci.backup
       - name: Verify restored state and process the restored job
         run: node scripts/restore-fixture.js verify
