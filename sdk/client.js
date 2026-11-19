@@ -26,6 +26,8 @@ export class CacheloomClient {
   }
   extend(id, leaseToken, leaseSeconds) { return this.jobCommand('EXTEND', { id, leaseToken, leaseSeconds }); }
   getJob(id) { return this.jobCommand('GET', { id }); }
+  queueMetrics(queue) { return this.jobCommand('METRICS', queue ? { queue } : {}); }
+  listJobs(options = {}) { return this.jobCommand('LIST', options); }
   cancelJob(id) { return this.jobCommand('CANCEL', { id }); }
   replayJob(id) { return this.jobCommand('REPLAY', { id }); }
   get(key) { return this.command('GET', key); }
