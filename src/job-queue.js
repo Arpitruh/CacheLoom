@@ -141,4 +141,35 @@ export class PostgresJobQueue {
     `, [project,id]);
     return result.rowCount === 1;
   }
+  async metrics({ project, queue = null }) {
+    // Returning aggregates rather than payloads makes monitoring safe for
+    // application operators who shouldn't have access to email contents.
+    const result = await this.pool.query(`
+      SELECT queue_name, status, count(*)::integer AS count,
+        min(created_at) AS oldest_created_at,
+        count(*) FILTER (WHERE status='pending' AND run_at <= clock_timestamp())::integer AS due,
+        count(*) FILTER (WHERE status='running' AND locked_until < clock_timestamp())::integer AS expired_leases
+      FROM cacheloom_jobs
+      WHERE project=$1 AND ($2::text IS NULL OR queue_name=$2)
+      GROUP BY queue_name,status
+      ORDER BY queue_name,status
+    `, [project, queue]);
+    return result.rows;
+  }
+
+  async list({ project, queue = null, status = null, limit = 25 }) {
+    // Paginated recent jobs aid troubleshooting. Never include payload or
+    // idempotency keys in responses used by a read-only dashboard.
+    const result = await this.pool.query(`
+      SELECT id,queue_name AS queue,status,priority,attempts,max_attempts,
+        run_at,locked_until,last_error,created_at,completed_at
+      FROM cacheloom_jobs
+      WHERE project=$1 AND ($2::text IS NULL OR queue_name=$2)
+        AND ($3::text IS NULL OR status=$3)
+      ORDER BY created_at DESC,id DESC
+      LIMIT $4
+    `, [project,queue,status,limit]);
+    return result.rows;
+  }
+
 }
