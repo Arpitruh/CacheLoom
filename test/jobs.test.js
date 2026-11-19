@@ -27,6 +27,15 @@ test('only one durable job exists for parallel idempotent requests', { skip: !en
   assert.equal(results.filter(x => x.duplicate).length, 19);
 });
 
+test('reusing one idempotency key with different data is a conflict', { skip: !enabled }, async () => {
+  const queue = 'conflict_' + randomUUID().slice(0, 8);
+  await jobs.enqueue({ project, queue, payload: { order: 'first' }, idempotencyKey: 'same-key' });
+  await assert.rejects(
+    () => jobs.enqueue({ project, queue, payload: { order: 'different' }, idempotencyKey: 'same-key' }),
+    /JOB_KEY_CONFLICT/,
+  );
+});
+
 test('scheduling, priority and project isolation survive database-backed claims', { skip: !enabled }, async () => {
   const queue = 'scheduling_' + randomUUID().slice(0, 8);
   const slow = await jobs.enqueue({ project, queue, payload: { order: 1 }, delaySeconds: 120 });
