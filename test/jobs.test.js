@@ -115,3 +115,24 @@ test('authenticated HTTP clients can enqueue, claim and acknowledge their own jo
     assert.equal((await fetch(url+'/ready')).status,200);
   } finally { await new Promise(resolve=>server.close(resolve)); }
 });
+
+test('metrics and recent jobs stay inside the authenticated project', { skip: !enabled }, async () => {
+  const queue = 'metrics_' + randomUUID().slice(0, 8);
+  const first = await jobs.enqueue({ project, queue, payload: { secret: 'not for dashboard' } });
+  await jobs.enqueue({ project: otherProject, queue, payload: { secret: 'another tenant' } });
+  const rows = await jobs.metrics({ project, queue });
+  assert.equal(rows.find(r => r.status === 'pending')?.count, 1);
+  assert.equal(rows.find(r => r.status === 'pending')?.due, 1);
+  const recent = await jobs.list({ project, queue, limit: 10 });
+  assert.equal(recent.length, 1);
+  assert.equal(recent[0].id, first.id);
+  assert.equal(Object.hasOwn(recent[0], 'payload'), false);
+  const secret = 'metrics-test-client-secret-with-32-characters';
+  const server = createCacheloomServer({ keys: JSON.stringify({ [project]: secret }), jobs });
+  await new Promise(resolve => server.listen(0, '127.0.0.1', resolve));
+  try {
+    const client = new CacheloomClient({ url: 'http://127.0.0.1:' + server.address().port, apiKey: secret });
+    assert.equal((await client.queueMetrics(queue)).find(x => x.status === 'pending')?.count, 1);
+    assert.equal((await client.listJobs({ queue }))[0].id, first.id);
+  } finally { await new Promise(resolve => server.close(resolve)); }
+});

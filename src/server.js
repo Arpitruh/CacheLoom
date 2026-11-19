@@ -1,5 +1,6 @@
 import http from 'node:http';
 import crypto from 'node:crypto';
+import { readFile } from 'node:fs/promises';
 import { resolve } from 'node:path';
 import { pathToFileURL } from 'node:url';
 import { VolatileStore } from './store.js';
@@ -99,6 +100,16 @@ async function dispatchJobCommand(jobs, project, body) {
       if (!validId || !validToken || !integer(body.leaseSeconds, 5, 3600))
         throw jobInputError('INVALID_EXTEND');
       return jobs.extend({ project, id, leaseToken: token, leaseSeconds: body.leaseSeconds });
+    case 'METRICS':
+      if (queue !== undefined && !validQueue) throw jobInputError('INVALID_QUEUE');
+      return jobs.metrics({ project, queue: queue ?? null });
+    case 'LIST':
+      if (queue !== undefined && !validQueue) throw jobInputError('INVALID_QUEUE');
+      if (body.status !== undefined &&
+        !['pending', 'running', 'completed', 'dead', 'cancelled'].includes(body.status))
+        throw jobInputError('INVALID_JOB_STATUS');
+      if (!integer(body.limit ?? 25, 1, 100)) throw jobInputError('INVALID_LIST_LIMIT');
+      return jobs.list({ project, queue: queue ?? null, status: body.status ?? null, limit: body.limit ?? 25 });
     case 'GET':
       if (!validId) throw jobInputError('INVALID_JOB_ID');
       return jobs.get({ project, id });
@@ -122,6 +133,20 @@ export function createCacheloomServer({ keys, maxKeys = 10000, store = new Volat
   interval.unref();
   const server = http.createServer(async (req, res) => {
     try {
+      if (req.method === 'GET' && ['/dashboard','/dashboard.css','/dashboard.js'].includes(req.url)) {
+        const file = req.url === '/dashboard' ? 'dashboard.html' : req.url.slice(1);
+        const type = file.endsWith('.html') ? 'text/html; charset=utf-8'
+          : file.endsWith('.css') ? 'text/css; charset=utf-8' : 'text/javascript; charset=utf-8';
+        const data = await readFile(new URL('./' + file, import.meta.url));
+        // Static UI only. The API stays authenticated and project-scoped.
+        res.writeHead(200, {
+          'content-type': type, 'cache-control': 'no-store',
+          'x-content-type-options': 'nosniff', 'referrer-policy': 'no-referrer',
+          'content-security-policy': "default-src 'none'; script-src 'self'; style-src 'self'; connect-src 'self'; base-uri 'none'; form-action 'none'; frame-ancestors 'none'",
+        });
+        res.end(data);
+        return;
+      }
       if (req.url === '/health' && req.method === 'GET') return send(res, 200, { status: 'up' });
       if (req.url === '/ready' && req.method === 'GET') {
         try {
