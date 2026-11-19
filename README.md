@@ -2,7 +2,7 @@
 
 **Build infrastructure you own.** A free, self-hostable foundation for a multi-project cache, session, and job platform.
 
-> **Status: v0.9.0 / experimental.** PostgreSQL-backed durable keys are now available as an opt-in backend. CacheLoom is not Redis-protocol-compatible and cannot be used as a drop-in BullMQ backend. Do not move production authentication or notification queues until operational and failure-recovery testing is complete.
+> **Status: v1.0.0-rc.1 / experimental release candidate.** PostgreSQL-backed durable keys are now available as an opt-in backend. CacheLoom is not Redis-protocol-compatible and cannot be used as a drop-in BullMQ backend. Do not move production authentication or notification queues until operational and failure-recovery testing is complete.
 
 ## Available today
 
@@ -419,3 +419,36 @@ This is staging coverage, **not a deployed full end-to-end cutover**.
 The Notification Service PR stays unmerged pending a deliberate staging
 deployment and review. Production remains on BullMQ/Redis. Do not enable
 `CACHELOOM_STAGING_SHADOW` in production.
+
+## v1.0.0-rc.1 release gates
+
+**This is a release candidate, not a production-ready 1.0 release.**
+The new CI smoke workflow starts a disposable PostgreSQL 16 server and
+verifies readiness, auth, key TTL, idempotent enqueue, claim and ACK via
+the real HTTP client.
+
+To run it against a locally controlled staging instance:
+
+```bash
+export CACHELOOM_STAGING_URL=http://127.0.0.1:8080
+export CACHELOOM_STAGING_KEY='your-32-character-or-longer-test-key'
+npm run smoke:staging
+```
+
+Remote staging **requires HTTPS** and the explicit environment variable
+`CACHELOOM_ALLOW_REMOTE_SMOKE=I_UNDERSTAND_STAGING_ONLY`. Do not point
+the smoke script at a production service; it writes disposable keys and jobs.
+
+**Release blockers that remain open:**
+- Deploy a real private staging CacheLoom service and rerun smoke checks
+  against it (not merely a CI container)
+- Verify rollback to BullMQ/Redis using a realistic notification failure
+  and test provider-acceptance ambiguity without real outbound messages
+- Test multi-worker throughput, free-tier Postgres limits and failure alerts
+  for representative workloads
+- Audit network exposure, operator permissions, secrets and backup schedules
+- Review Notification Service's [draft staging PR](https://github.com/Arpitruh/Notification-Service/pull/12)
+  before merging or activating it
+
+Do not replace Auth Service sessions or Notification Service's queue until
+these gates are met. CacheLoom does **not** implement the Redis protocol.

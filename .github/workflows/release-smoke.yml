@@ -1,0 +1,57 @@
+name: CacheLoom release-candidate smoke checks
+on:
+  pull_request:
+    paths:
+      - 'scripts/smoke-staging.js'
+      - '.github/workflows/release-smoke.yml'
+      - 'sdk/**'
+      - 'src/**'
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  smoke:
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: test-password
+          POSTGRES_DB: cacheloom_test
+        ports: ['5432:5432']
+        options: >-
+          --health-cmd "pg_isready -U postgres -d cacheloom_test"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+    env:
+      DATABASE_URL: postgresql://postgres:test-password@127.0.0.1:5432/cacheloom_test
+      CACHELOOM_API_KEYS: '{"smoke":"staging-smoke-key-longer-than-thirty-two-characters"}'
+      CACHELOOM_STAGING_KEY: staging-smoke-key-longer-than-thirty-two-characters
+      CACHELOOM_STAGING_URL: http://127.0.0.1:8080
+      CACHELOOM_STORAGE: postgres
+      HOST: 127.0.0.1
+      PORT: '8080'
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - run: npm install --no-audit --no-fund
+      - run: npm run migrate
+      - name: Start disposable CacheLoom server
+        run: |
+          node src/server.js > /tmp/cacheloom-smoke.log 2>&1 &
+          echo $! > /tmp/cacheloom-smoke.pid
+          for attempt in $(seq 1 40); do
+            if curl --fail --silent http://127.0.0.1:8080/ready >/dev/null; then exit 0; fi
+            sleep 0.25
+          done
+          cat /tmp/cacheloom-smoke.log
+          exit 1
+      - run: npm run smoke:staging
+      - name: Shut down disposable server
+        if: always()
+        run: |
+          if test -f /tmp/cacheloom-smoke.pid; then kill "$(cat /tmp/cacheloom-smoke.pid)" || true; fi
