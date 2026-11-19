@@ -27,6 +27,7 @@ jobs:
       - run: node --check scripts/bench-local.js
       - run: node --check scripts/restore-fixture.js
       - run: node --check scripts/bench-queue-pg.js
+      - run: node --check integrations/notification-staging.js
       - run: node --check scripts/migrate.js
       - run: node --check scripts/prune-jobs.js
       - run: node --check sdk/client.js

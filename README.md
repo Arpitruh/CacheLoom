@@ -2,7 +2,7 @@
 
 **Build infrastructure you own.** A free, self-hostable foundation for a multi-project cache, session, and job platform.
 
-> **Status: v0.7.0 / experimental.** PostgreSQL-backed durable keys are now available as an opt-in backend. CacheLoom is not Redis-protocol-compatible and cannot be used as a drop-in BullMQ backend. Do not move production authentication or notification queues until operational and failure-recovery testing is complete.
+> **Status: v0.8.0 / experimental.** PostgreSQL-backed durable keys are now available as an opt-in backend. CacheLoom is not Redis-protocol-compatible and cannot be used as a drop-in BullMQ backend. Do not move production authentication or notification queues until operational and failure-recovery testing is complete.
 
 ## Available today
 
@@ -346,3 +346,58 @@ configured; never run the benchmark against hosted production data.
 **Still to do before production migration:** repeat restore drills against
 your actual staging infrastructure; measure representative multi-worker
 traffic; add provider-side idempotency checks and operational alerts.
+
+## Notification Service staging bridge (v0.8.0)
+
+CacheLoom now includes a **staging-only** mapping for the current
+`Arpitruh/Notification-Service` relay and worker. Its existing relay
+publishes an outbox ID, notification ID, scheduled time and priority. The
+bridge maps these into a CacheLoom job without carrying recipients, rendered
+email, SMTP credentials or template data.
+
+```js
+import {
+  enqueueNotificationForStaging,
+  NOTIFICATION_STAGING_QUEUE,
+  createNotificationStagingHandler,
+} from './integrations/notification-staging.js';
+import { CacheloomWorker } from './sdk/worker.js';
+
+await enqueueNotificationForStaging(client, {
+  outboxId: 'outbox-123', notificationId: 'notification-456',
+  scheduledFor: new Date(Date.now() + 60_000).toISOString(), priority: 3,
+});
+
+// The test handler only records that a delivery WOULD have been attempted.
+const handler = createNotificationStagingHandler({
+  inspect: async id => stagingNotificationLookup(id),
+  onSimulatedDelivery: async event => stagingLog.push(event),
+});
+new CacheloomWorker({
+  client, queue: NOTIFICATION_STAGING_QUEUE,
+  handler, pollIntervalMs: 2000,
+}).start();
+```
+
+### Important differences from the production BullMQ flow
+
+- The PostgreSQL notification outbox and attempt ledger remain authoritative.
+  CacheLoom's `idempotencyKey` uses the outbox ID and prevents duplicate
+  enqueues **as long as the corresponding CacheLoom record is retained**.
+- CacheLoom uses a different job ID and attempt numbering. This adapter does
+  **not** implement BullMQ's `Job` interface or its exponential backoff,
+  stalled-job behavior, `getJob()` reconciliation, or provider-side guarantees.
+- Notification Service currently uses its own delivery claim fence, outcome
+  classification and safe handling of uncertain SMTP acceptance. These must
+  remain intact before any real provider integration.
+- The staging simulation never sends real email or SMS. It is not a real
+  Notification Service deployment or a production migration.
+- Integration tests use a disposable PostgreSQL database, synthetic
+  notification IDs and CacheLoom's actual HTTP/worker paths. No paid services
+  or credentials are required.
+
+**Migration gate:** Only consider a feature-flagged staging integration
+after adapting Notification Service's relay, readiness, reconciler and worker
+to preserve the notification database's delivery safety checks. Prove restart
+recovery and provider-acceptance ambiguity with mocked providers before
+even discussing a production cutover.
