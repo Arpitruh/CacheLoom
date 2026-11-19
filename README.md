@@ -2,7 +2,7 @@
 
 **Build infrastructure you own.** A free, self-hostable foundation for a multi-project cache, session, and job platform.
 
-> **Status: v0.2.0 / experimental.** PostgreSQL-backed durable keys are now available as an opt-in backend. CacheLoom is not Redis-protocol-compatible and cannot replace BullMQ yet. Do not move production authentication or notification queues until operational and failure-recovery testing is complete.
+> **Status: v0.3.0 / experimental.** PostgreSQL-backed durable keys are now available as an opt-in backend. CacheLoom is not Redis-protocol-compatible and cannot be used as a drop-in BullMQ backend. Do not move production authentication or notification queues until operational and failure-recovery testing is complete.
 
 ## Available today
 
@@ -81,7 +81,7 @@ Test with `npm test`. CI also runs `npm run test:postgres` against disposable Po
 
 - Bind to `127.0.0.1` by default. Public deployment requires TLS/reverse proxy, firewall, rate limits and secret management.
 - `/health` is unauthenticated; all KV commands require bearer authentication.
-- Memory mode loses all values on shutdown; PostgreSQL mode keeps committed key/value data. Neither mode provides a durable job queue yet.
+- Memory mode loses all values on shutdown; PostgreSQL mode keeps committed key/value data. The PostgreSQL backend includes a durable, at-least-once job queue; memory mode has no queue.
 - Memory mode is single-process. PostgreSQL mode can share state between API instances, but lacks production-grade admission control and load testing.
 - No RESP, Redis scripting, transactions, clustering, pub/sub or BullMQ compatibility.
 - No paid services required to develop and test. PostgreSQL mode uses the open-source `pg` driver and whichever database you configure.
@@ -90,8 +90,58 @@ Test with `npm test`. CI also runs `npm run test:postgres` against disposable Po
 
 1. **M1 (current):** Core key-value operations, TTL, auth, JS SDK and tests.
 2. **M2:** PostgreSQL-backed durable keyspace for sessions and distributed rate limits; key rotation and quotas.
-3. **M3:** Persistent SQL job queue using `FOR UPDATE SKIP LOCKED`, leases, retries, scheduling and dead letters.
+3. **M3 (implemented, experimental):** Persistent SQL job queue using `FOR UPDATE SKIP LOCKED`, fenced leases, retries, scheduling and dead letters.
 4. **M4:** Redis RESP2 subset and command compatibility tests. BullMQ parity is a separate milestone.
 5. **M5:** Admin dashboard, metrics, audit logs, backup/restore, observability and load testing.
 
 Existing production Auth/Notification services remain unchanged until CacheLoom passes security and failure-recovery testing.
+
+## Durable jobs (v0.3.0)
+
+Jobs require `CACHELOOM_STORAGE=postgres` and an explicit `npm run migrate`.
+The schema is shared with the key/value store, but each API key is restricted to
+its own project's jobs. Storage and delivery are **at least once**, not exactly once.
+
+```js
+import { CacheloomClient } from './sdk/client.js';
+
+const client = new CacheloomClient({
+  url: 'http://127.0.0.1:8080', apiKey: process.env.CACHELOOM_KEY,
+});
+
+// A stable idempotency key prevents duplicate enqueue requests.
+const created = await client.enqueue('emails', { recipient: 'user@example.test' }, {
+  idempotencyKey: 'registration:user-123',
+  maxAttempts: 3, delaySeconds: 10, priority: 10,
+});
+
+// Put this loop in a dedicated worker process, not in your API request handler.
+const [job] = await client.claim('emails', { limit: 1, leaseSeconds: 60 });
+if (job) {
+  try {
+    // Your handler must be idempotent: after a crash, this job may run twice.
+    await processEmail(job.payload);
+    const acknowledged = await client.acknowledge(job.id, job.lease_token);
+    if (!acknowledged) console.warn('Lease expired before acknowledgement');
+  } catch (error) {
+    await client.fail(job.id, job.lease_token, 'Email delivery failed', {
+      retryable: true, retryDelaySeconds: 15,
+    });
+  }
+}
+```
+
+Supported `POST /v1/jobs` commands: `ENQUEUE`, `CLAIM`, `ACK`,
+`FAIL`, `EXTEND`, `GET`, `CANCEL`, and `REPLAY`. Request bodies are
+JSON, protected by a project API key. Jobs can be scheduled up to 30 days ahead.
+Workers may extend an active lease, but an expired worker cannot ACK/FAIL
+a reclaimed job. Priority is higher number first; each claim is bounded to
+25 jobs. Persistent dedupe keys remain reserved even after completion.
+
+**Limitations:** No BullMQ protocol compatibility, push notifications,
+distributed cron, consumer quotas, job archival/retention, or automatic
+handler isolation yet. `REPLAY` is intentionally limited to dead jobs.
+A lost lease may mean the side effect ran before the worker crashed, so use
+an idempotent handler and avoid blind retries of non-idempotent SMTP sends.
+The free database and hosting plans have limits: use modest polling intervals,
+monitor compute/storage use, and do not point CI at a production database.
