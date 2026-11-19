@@ -53,7 +53,66 @@ function readJSON(req) {
   });
 }
 
-export function createCacheloomServer({ keys, maxKeys = 10000, store = new VolatileStore({ maxKeys }) }) {
+
+function jobInputError(message) {
+  const error = new Error(message);
+  error.status = 400;
+  return error;
+}
+
+async function dispatchJobCommand(jobs, project, body) {
+  const queue = body.queue;
+  const id = body.id;
+  const token = body.leaseToken;
+  const validQueue = typeof queue === 'string' && /^[a-zA-Z0-9_-]{1,80}$/.test(queue);
+  const validId = typeof id === 'string' &&
+    /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(id);
+  const validToken = typeof token === 'string' &&
+    /^[0-9a-f-]{36}$/i.test(token);
+  const integer = (n, min, max) => Number.isSafeInteger(n) && n >= min && n <= max;
+  switch (body.command) {
+    case 'ENQUEUE':
+      if (!validQueue || !Object.hasOwn(body, 'payload') || body.payload === undefined ||
+        Buffer.byteLength(JSON.stringify(body.payload)) > MAX_VALUE ||
+        (body.idempotencyKey !== undefined &&
+         (typeof body.idempotencyKey !== 'string' || body.idempotencyKey.length > 150 || !body.idempotencyKey.length)) ||
+        !integer(body.priority ?? 0, -10000, 10000) ||
+        !integer(body.maxAttempts ?? 3, 1, 100) ||
+        !integer(body.delaySeconds ?? 0, 0, 2592000))
+        throw jobInputError('INVALID_ENQUEUE');
+      return jobs.enqueue({ project, queue, payload: body.payload, idempotencyKey: body.idempotencyKey,
+        priority: body.priority, maxAttempts: body.maxAttempts, delaySeconds: body.delaySeconds });
+    case 'CLAIM':
+      if (!validQueue || !integer(body.limit ?? 1, 1, 25) ||
+        !integer(body.leaseSeconds ?? 60, 5, 3600)) throw jobInputError('INVALID_CLAIM');
+      return jobs.claim({ project, queue, limit: body.limit, leaseSeconds: body.leaseSeconds });
+    case 'ACK':
+      if (!validId || !validToken) throw jobInputError('INVALID_ACK');
+      return jobs.acknowledge({ project, id, leaseToken: token });
+    case 'FAIL':
+      if (!validId || !validToken || typeof body.error !== 'string' || !body.error.length ||
+        body.error.length > 500 || (body.retryable !== undefined && typeof body.retryable !== 'boolean') ||
+        !integer(body.retryDelaySeconds ?? 5, 0, 2592000)) throw jobInputError('INVALID_FAIL');
+      return jobs.fail({ project, id, leaseToken: token, error: body.error,
+        retryable: body.retryable, retryDelaySeconds: body.retryDelaySeconds });
+    case 'EXTEND':
+      if (!validId || !validToken || !integer(body.leaseSeconds, 5, 3600))
+        throw jobInputError('INVALID_EXTEND');
+      return jobs.extend({ project, id, leaseToken: token, leaseSeconds: body.leaseSeconds });
+    case 'GET':
+      if (!validId) throw jobInputError('INVALID_JOB_ID');
+      return jobs.get({ project, id });
+    case 'CANCEL':
+      if (!validId) throw jobInputError('INVALID_JOB_ID');
+      return jobs.cancel({ project, id });
+    case 'REPLAY':
+      if (!validId) throw jobInputError('INVALID_JOB_ID');
+      return jobs.replay({ project, id });
+    default: throw jobInputError('UNKNOWN_JOB_COMMAND');
+  }
+}
+
+export function createCacheloomServer({ keys, maxKeys = 10000, store = new VolatileStore({ maxKeys }), jobs = null }) {
   const authKeys = Array.isArray(keys) ? keys : parseKeys(keys);
   const interval = setInterval(() => {
     // A temporary database outage should never become an unhandled timer error.
@@ -67,17 +126,25 @@ export function createCacheloomServer({ keys, maxKeys = 10000, store = new Volat
       if (req.url === '/ready' && req.method === 'GET') {
         try {
           if (store.ping) await store.ping();
+          if (jobs) await jobs.ready();
           return send(res, 200, { status: 'ready' });
         } catch {
           return failure(res, 503, 'STORAGE_UNAVAILABLE');
         }
       }
-      if (req.url !== '/v1/kv' || req.method !== 'POST') return failure(res, 404, 'NOT_FOUND');
+      if (!['/v1/kv', '/v1/jobs'].includes(req.url) || req.method !== 'POST')
+        return failure(res, 404, 'NOT_FOUND');
       const project = authenticate(req.headers.authorization, authKeys);
       if (!project) return failure(res, 401, 'UNAUTHORIZED');
       if (!String(req.headers['content-type'] || '').toLowerCase().startsWith('application/json')) return failure(res, 415, 'CONTENT_TYPE_REQUIRED');
       const body = await readJSON(req);
-      if (!body || typeof body !== 'object' || Array.isArray(body) || !validKey(body.key)) return failure(res, 400, 'INVALID_KEY');
+      if (!body || typeof body !== 'object' || Array.isArray(body)) return failure(res, 400, 'INVALID_REQUEST');
+      if (req.url === '/v1/jobs') {
+        if (!jobs) return failure(res, 503, 'JOB_QUEUE_NOT_CONFIGURED');
+        const result = await dispatchJobCommand(jobs, project, body);
+        return send(res, 200, { result });
+      }
+      if (!validKey(body.key)) return failure(res, 400, 'INVALID_KEY');
       // PostgreSQL TEXT cannot store a NUL byte, so encode the user key.
       const key = `${project}:${Buffer.from(body.key).toString('base64url')}`;
       let result;
@@ -127,7 +194,13 @@ if (process.argv[1] && import.meta.url === pathToFileURL(resolve(process.argv[1]
     ? (await import('./pg-store.js')).createPostgresStore({ connectionString: process.env.DATABASE_URL })
     : new VolatileStore({ maxKeys: Number(process.env.MAX_KEYS ?? 10000) });
   if (store.ping) await store.ping();
-  const server = createCacheloomServer({ keys: process.env.CACHELOOM_API_KEYS, store });
+  // The queue is opt-in and only works with PostgreSQL. Memory-mode users
+  // aren't presented with a queue that would silently drop work on restart.
+  const jobs = backend === 'postgres'
+    ? new (await import('./job-queue.js')).PostgresJobQueue({ pool: store.pool })
+    : null;
+  if (jobs) await jobs.ready();
+  const server = createCacheloomServer({ keys: process.env.CACHELOOM_API_KEYS, store, jobs });
   server.listen(port, host, () => console.log(`[cacheloom] ${backend} backend listening on ${host}:${port}`));
   for (const signal of ['SIGINT', 'SIGTERM']) process.once(signal, () => {
     server.close(() => { void Promise.resolve(store.close?.()).then(() => process.exit(0)); });
