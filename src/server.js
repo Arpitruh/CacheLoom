@@ -135,8 +135,14 @@ async function dispatchJobCommand(jobs, project, body) {
       if (!validId) throw jobInputError('INVALID_JOB_ID');
       return jobs.cancel({ project, id });
     case 'REPLAY':
-      if (!validId) throw jobInputError('INVALID_JOB_ID');
-      return jobs.replay({ project, id });
+      if (!validId || typeof body.reason !== 'string' ||
+        body.reason.trim().length < 10 || body.reason.trim().length > 300 ||
+        body.acknowledgeDuplicateRisk !== true) throw jobInputError('REPLAY_REQUIRES_REASON_AND_RISK_ACKNOWLEDGEMENT');
+      return jobs.replay({ project, id, reason: body.reason,
+        acknowledgeDuplicateRisk: body.acknowledgeDuplicateRisk });
+    case 'REPLAY_AUDIT':
+      if (!integer(body.limit ?? 25, 1, 100)) throw jobInputError('INVALID_AUDIT_LIMIT');
+      return jobs.replayAudit({ project, limit: body.limit ?? 25 });
     default: throw jobInputError('UNKNOWN_JOB_COMMAND');
   }
 }
