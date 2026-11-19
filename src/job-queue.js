@@ -34,9 +34,14 @@ export class PostgresJobQueue {
     `, [id,project,queue,JSON.stringify(payload),idempotencyKey,priority,maxAttempts,delaySeconds]);
     if (result.rowCount) return { id: result.rows[0].id, status: 'pending', duplicate: false };
     const existing = await this.pool.query(
-      'SELECT id,status FROM cacheloom_jobs WHERE project=$1 AND queue_name=$2 AND idempotency_key=$3',
-      [project,queue,idempotencyKey]);
+      'SELECT id,status,(payload=$4::jsonb) AS same_payload FROM cacheloom_jobs WHERE project=$1 AND queue_name=$2 AND idempotency_key=$3',
+      [project,queue,idempotencyKey,JSON.stringify(payload)]);
     if (!existing.rows[0]) throw new Error('Failed to resolve concurrent idempotent enqueue');
+    if (!existing.rows[0].same_payload) {
+      const error = new Error('JOB_KEY_CONFLICT');
+      error.status = 409;
+      throw error;
+    }
     return { id: existing.rows[0].id, status: existing.rows[0].status, duplicate: true };
   }
 
