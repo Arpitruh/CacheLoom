@@ -99,6 +99,16 @@ async function dispatchJobCommand(jobs, project, body) {
       if (!validId || !validToken || !integer(body.leaseSeconds, 5, 3600))
         throw jobInputError('INVALID_EXTEND');
       return jobs.extend({ project, id, leaseToken: token, leaseSeconds: body.leaseSeconds });
+    case 'METRICS':
+      if (queue !== undefined && !validQueue) throw jobInputError('INVALID_QUEUE');
+      return jobs.metrics({ project, queue: queue ?? null });
+    case 'LIST':
+      if (queue !== undefined && !validQueue) throw jobInputError('INVALID_QUEUE');
+      if (body.status !== undefined &&
+        !['pending', 'running', 'completed', 'dead', 'cancelled'].includes(body.status))
+        throw jobInputError('INVALID_JOB_STATUS');
+      if (!integer(body.limit ?? 25, 1, 100)) throw jobInputError('INVALID_LIST_LIMIT');
+      return jobs.list({ project, queue: queue ?? null, status: body.status ?? null, limit: body.limit ?? 25 });
     case 'GET':
       if (!validId) throw jobInputError('INVALID_JOB_ID');
       return jobs.get({ project, id });
