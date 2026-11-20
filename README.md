@@ -1,14 +1,16 @@
 # CacheLoom
 
-### Self-hosted caching and background job infrastructure, built with Node.js
+### A small caching and job queue service built with Node.js
 
-**CacheLoom** is an open-source backend infrastructure project that explores how to build a reusable caching and job-processing platform from the ground up. It combines a lightweight HTTP API, isolated application keyspaces, TTL-based caching, persistent PostgreSQL storage, and a durable background job queue with a JavaScript SDK.
+I started **CacheLoom** because I wanted to understand what happens behind the scenes when an app stores temporary data or hands work off to a background queue. Rather than only using an existing service, I built a small one to experiment with those ideas.
+
+It began as a key-value cache and grew into a Node.js API with TTL support, PostgreSQL persistence, project-level API keys, a job queue and a JavaScript SDK. The goal is to make these building blocks reusable across different projects, while learning where the tricky parts are.
 
 **Node.js 22 · PostgreSQL · REST API · Docker · GitHub Actions**
 
-> **Project stage:** Experimental release candidate (`v1.0.0-rc.1`). Core features are implemented and covered by automated tests. This is an engineering project, not a production SLA or a Redis-protocol-compatible server.
+> **Status:** `v1.0.0-rc.1` — experimental. The main features work in automated tests, but there's still operational testing and hardening to do before I'd rely on it in production.
 
-## What it can do
+## What's built so far
 
 | Capability | Implementation |
 | --- | --- |
@@ -47,9 +49,9 @@
                                    Application handlers
 ```
 
-The API is built on Node.js's native HTTP server. PostgreSQL mode uses the `pg` package for durable state, transactional counters and queue coordination. Workers claim jobs with database locking and time-bound leases; expired leases can be reclaimed by another worker.
+I kept the HTTP layer simple by using Node's built-in server. In PostgreSQL mode, the `pg` package handles persistent values and queue operations. Jobs are claimed using database locks and leases, so another worker can pick them up if the first one stops responding.
 
-## Quick start
+## Run it locally
 
 Requires **Node.js 20+**.
 
@@ -59,13 +61,13 @@ cd CacheLoom
 npm install
 ```
 
-Generate a local API secret:
+First, generate an API key for your local project:
 
 ```bash
 node -e "console.log(require('node:crypto').randomBytes(32).toString('hex'))"
 ```
 
-Set the following environment variables in your terminal (replace the placeholder with your generated secret):
+Set the environment variables below, replacing the placeholder with that key:
 
 ```bash
 export HOST=127.0.0.1
@@ -107,9 +109,9 @@ console.log(await cache.get('profile:42'));
 console.log(await cache.incr('page:views'));
 ```
 
-## Persistent mode (PostgreSQL)
+## Keep data between restarts
 
-Use a local PostgreSQL instance or an external staging database. Set a valid `DATABASE_URL` for your database, then apply the included SQL migrations **before** starting the API:
+Memory mode is handy for quick tests, but everything disappears when the process stops. If you want data and queued jobs to survive restarts, connect a local or staging PostgreSQL database and run the migrations **before** starting the API:
 
 ```bash
 export DATABASE_URL='postgresql://USER:PASSWORD@HOST:5432/DATABASE'
@@ -138,9 +140,9 @@ if (claimed) {
 }
 ```
 
-The reusable `CacheloomWorker` in `sdk/worker.js` handles polling, concurrency, lease renewal and shutdown orchestration. Queue delivery is **at least once**, so application handlers must handle repeated attempts safely.
+For longer-running work, `CacheloomWorker` in `sdk/worker.js` takes care of polling, concurrent handlers, lease renewal and graceful shutdown. A job can still run more than once after a failure, so handlers need to be idempotent.
 
-## Monitoring and developer tooling
+## Debugging and testing
 
 - `/health` and `/ready` endpoints for service checks.
 - `/dashboard` for read-only job counts and recent activity.
@@ -154,15 +156,15 @@ npm test
 npm run test:postgres   # requires a configured disposable test database
 ```
 
-## Engineering decisions
+## A few things I learned while building it
 
-**Why build this?** To understand the internals of caching, concurrency, durable work queues and service reliability instead of treating infrastructure as a black box.
+**A cache is more than a map with an expiry time.** Once multiple apps use the same service, key isolation, limits, authentication and predictable failure behavior start to matter.
 
-**Why two storage modes?** Memory mode is simple for local experimentation; PostgreSQL mode demonstrates transactions, shared state and restart recovery.
+**Durability changes the trade-offs.** The in-memory store is straightforward and quick to work with. PostgreSQL makes restart recovery and shared state possible, but every operation now has database costs and contention to consider.
 
-**Why leases and idempotency keys?** Multiple workers can compete for jobs, and workers may crash after doing work but before acknowledging it. Lease fencing and deduplication reduce coordination errors, while idempotent handlers address the remaining duplicate-execution risk.
+**Background jobs are the interesting part.** A worker can finish a task and crash before acknowledging it. Leases help other workers recover the job, but they can't undo a side effect. That's why I added deduplication, fenced acknowledgements and replay auditing—and why handlers still need their own idempotency checks.
 
-## Current limitations
+## What it doesn't do (yet)
 
 - **Not a Redis replacement at the protocol level:** no RESP, pub/sub, Lua scripting or BullMQ compatibility.
 - PostgreSQL storage emphasizes durability rather than Redis-like in-memory throughput.
@@ -182,4 +184,4 @@ npm run test:postgres   # requires a configured disposable test database
 
 ---
 
-**Built as a hands-on backend systems engineering project.** Contributions, feedback and architecture discussions are welcome.
+I'm keeping this project public as a record of what I've built and learned. If you spot a bug, an edge case I missed, or a cleaner approach, feel free to open an issue or PR.
