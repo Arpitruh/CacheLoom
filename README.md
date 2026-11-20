@@ -2,7 +2,24 @@
 
 **Build infrastructure you own.** A free, self-hostable foundation for a multi-project cache, session, and job platform.
 
-> **Status: v1.0.0-rc.1 / experimental release candidate.** PostgreSQL-backed durable keys are now available as an opt-in backend. CacheLoom is not Redis-protocol-compatible and cannot be used as a drop-in BullMQ backend. Do not move production authentication or notification queues until operational and failure-recovery testing is complete.
+> **Project status (20 November 2026): Paused / archived in place.** The code remains available for learning, local testing and future development, but active deployment and production rollout are on hold. Latest version: `v1.0.0-rc.1` (experimental; no stable v1.0 release). CacheLoom is **not Redis-protocol-compatible** and **cannot replace BullMQ without integration changes**. Do not use it for production authentication, sessions or notification queues without completing the release gates below.
+
+## Current state
+
+| Area | Status |
+| --- | --- |
+| REST API, SDK, caching, TTL, atomic counters | Implemented |
+| PostgreSQL persistence, durable queue, worker SDK | Implemented, experimental |
+| Dashboard, rate limits, key rotation and recovery tests | Implemented / tested in CI |
+| GitHub CI | Passing on the last checked commit (`deb513c`) |
+| Oracle Cloud staging | Not deployed; signup/payment verification blocked the plan |
+| Northflank staging | Container image built, but deployment was **not healthy** at last inspection: required `CACHELOOM_API_KEYS` was missing |
+| Neon staging integration and remote smoke tests | Not verified |
+| Stable production release | Not released |
+
+**Deployment note:** A Northflank service was created during staging exploration, but it was restarting with `Error: CACHELOOM_API_KEYS is required`. Do not treat the service URL as a working endpoint or expect continuous availability. Hosting/account resources are **not** automatically stopped or deleted by pausing repository development; review them separately if needed.
+
+**Scope at pause:** No production Auth Service or Notification Service migration was performed. PostgreSQL-backed storage is a pragmatic durable alternative for some use cases, **not** a high-throughput drop-in Redis implementation. Existing local setup, architecture, integration notes and release gates remain documented below.
 
 ## Available today
 
@@ -12,7 +29,8 @@
 - NX/XX conditionals and optional TTL on SET
 - Constant-time API key digest comparisons
 - Capacity limit with **no silent eviction**, payload/key/TTL bounds, cleanup sweeper
-- PostgreSQL-backed durable JSON values, transactional counters and restart recovery\n- Automated unit tests, PostgreSQL integration tests and Dockerfile
+- PostgreSQL-backed durable JSON values, transactional counters and restart recovery
+- Automated unit tests, PostgreSQL integration tests and Dockerfile
 
 ## Local start
 
@@ -91,7 +109,7 @@ Test with `npm test`. CI also runs `npm run test:postgres` against disposable Po
 1. **M1 (completed):** Core key-value operations, TTL, auth, JS SDK and tests.
 2. **M2:** PostgreSQL-backed durable keyspace for sessions and distributed rate limits; key rotation and quotas.
 3. **M3 (implemented, experimental):** Persistent SQL job queue using `FOR UPDATE SKIP LOCKED`, fenced leases, retries, scheduling and dead letters.
-4. **M4 (in progress):** Reusable worker SDK, queue metrics and monitoring page; RESP2 compatibility remains a later milestone.
+4. **M4 (implemented, experimental):** Reusable worker SDK, queue metrics and monitoring page; RESP2 compatibility remains a later milestone.
 5. **M5:** Advanced administration, audit logs, backup/restore, operational observability and load testing.
 
 Existing production Auth/Notification services remain unchanged until CacheLoom passes security and failure-recovery testing.
