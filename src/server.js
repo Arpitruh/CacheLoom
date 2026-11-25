@@ -171,6 +171,10 @@ export function createCacheloomServer({ keys, maxKeys = 10000,
   interval.unref();
   const server = http.createServer(async (req, res) => {
     try {
+      if (req.method === 'GET' && req.url === '/') {
+        res.writeHead(302, { location: '/dashboard', 'cache-control': 'no-store' });
+        return res.end();
+      }
       if (req.method === 'GET' && ['/dashboard','/dashboard.css','/dashboard.js'].includes(req.url)) {
         const file = req.url === '/dashboard' ? 'dashboard.html' : req.url.slice(1);
         const type = file.endsWith('.html') ? 'text/html; charset=utf-8'
