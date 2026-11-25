@@ -1,9 +1,5 @@
 # CacheLoom
 
-**Node.js key-value cache and background job queue with PostgreSQL persistence.** An experimental developer infrastructure service supporting TTL, atomic counters, project isolation and a JavaScript SDK.
-
-
-### A small caching and job queue service built with Node.js
 
 I started **CacheLoom** because I wanted to understand what happens behind the scenes when an app stores temporary data or hands work off to a background queue. Rather than only using an existing service, I built a small one to experiment with those ideas.
 
