@@ -13,7 +13,10 @@ async function command(apiKey, command, options = {}) {
     cache: 'no-store',
   });
   const data = await response.json();
-  if (!response.ok) throw new Error('Request failed (' + response.status + '). Check the key and service health.');
+  if (!response.ok) {
+    const messages = { UNAUTHORIZED: 'Invalid project API key.', JOB_QUEUE_NOT_CONFIGURED: 'The job queue requires PostgreSQL storage.', STORAGE_UNAVAILABLE: 'Storage is temporarily unavailable. Please retry.', PROJECT_RATE_LIMITED: 'Request limit reached. Try again in a minute.' };
+    throw new Error(messages[data.error] || 'Request failed (' + response.status + ').');
+  }
   return data.result;
 }
 
